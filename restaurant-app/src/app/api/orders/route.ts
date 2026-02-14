@@ -7,12 +7,11 @@ export async function POST(request: NextRequest) {
 
   const supabase = await createClient()
 
-  // Calculate total
   const total = items.reduce((sum: number, item: any) =>
     sum + (item.unit_price * item.quantity), 0
   )
 
-  // Create order
+  // Create order with new status 'nueva'
   const { data: order, error: orderError } = await supabase
     .from('orders')
     .insert({
@@ -21,7 +20,7 @@ export async function POST(request: NextRequest) {
       total_amount: total,
       customer_name,
       notes,
-      status: 'pending'
+      status: 'nueva'
     })
     .select()
     .single()
@@ -47,6 +46,14 @@ export async function POST(request: NextRequest) {
   if (itemsError) {
     return NextResponse.json({ error: itemsError.message }, { status: 500 })
   }
+
+  // Log initial status
+  await supabase.from('order_status_log').insert({
+    order_id: order.id,
+    from_status: null,
+    to_status: 'nueva',
+    changed_by: customer_name || 'Cliente',
+  })
 
   return NextResponse.json({ data: order }, { status: 201 })
 }

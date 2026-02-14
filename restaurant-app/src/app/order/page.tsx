@@ -1,28 +1,89 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useState, useEffect } from 'react'
+import { useCartStore } from '@/lib/store/cart-store'
+import { useOrderTracking } from '@/lib/hooks/useRealtime'
 import { Button } from '@/components/ui/Button'
 import { Card } from '@/components/ui/Card'
+import { Navbar } from '@/components/layout/Navbar'
+import { StatusBadge } from '@/components/ui/StatusBadge'
 import { formatPrice } from '@/lib/utils/formatPrice'
+import { ORDER_STEPS, STATUS_LABELS, type OrderStatus } from '@/lib/types'
+import { ChevronLeft, Check, ClipboardList, Pencil, ShoppingBag } from 'lucide-react'
+import { motion } from 'framer-motion'
 import Link from 'next/link'
 
-interface CartItem {
-  id: string
-  menu_item_id: string
-  name: string
-  price: number
-  quantity: number
-}
+function OrderTracker({ orderId }: { orderId: string }) {
+  const order = useOrderTracking(orderId)
 
-interface CartData {
-  period_id: string
-  items: CartItem[]
-}
+  if (!order) return null
 
-const CART_KEY = 'restaurant-cart'
+  const currentIdx = ORDER_STEPS.indexOf(order.status as OrderStatus)
+  const isCancelled = order.status === 'cancelada'
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 20 }}
+      animate={{ opacity: 1, y: 0 }}
+      className="mt-8"
+    >
+      <Card>
+        <div className="flex items-center gap-2 mb-6">
+          <StatusBadge status={order.status as OrderStatus} />
+          <span className="text-sm text-gray-400">Orden #{order.order_number}</span>
+        </div>
+
+        {isCancelled ? (
+          <div className="text-center py-4">
+            <p className="text-red-600 font-semibold">Esta orden fue cancelada</p>
+          </div>
+        ) : (
+          <div className="relative">
+            {/* Progress bar */}
+            <div className="absolute top-5 left-5 right-5 h-0.5 bg-gray-200 rounded-full">
+              <motion.div
+                className="h-full bg-primary rounded-full"
+                initial={{ width: '0%' }}
+                animate={{ width: `${(currentIdx / (ORDER_STEPS.length - 1)) * 100}%` }}
+                transition={{ duration: 0.5 }}
+              />
+            </div>
+
+            <div className="relative flex justify-between">
+              {ORDER_STEPS.map((step, idx) => {
+                const isCompleted = idx <= currentIdx
+                const isCurrent = idx === currentIdx
+                return (
+                  <div key={step} className="flex flex-col items-center">
+                    <motion.div
+                      initial={{ scale: 0.8 }}
+                      animate={{ scale: isCurrent ? 1.1 : 1 }}
+                      className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold z-10 ${
+                        isCompleted
+                          ? 'bg-primary text-white'
+                          : 'bg-gray-200 text-gray-400'
+                      }`}
+                    >
+                      {isCompleted ? <Check className="w-4 h-4" /> : idx + 1}
+                    </motion.div>
+                    <span className={`text-xs mt-2 font-medium text-center ${
+                      isCompleted ? 'text-primary' : 'text-gray-400'
+                    }`}>
+                      {STATUS_LABELS[step]}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+      </Card>
+    </motion.div>
+  )
+}
 
 export default function OrderPage() {
-  const [cartData, setCartData] = useState<CartData | null>(null)
+  const { items, getTotalPrice, clearCart, periodId } = useCartStore()
   const [tableNumber, setTableNumber] = useState('')
   const [customerName, setCustomerName] = useState('')
   const [notes, setNotes] = useState('')
@@ -30,23 +91,11 @@ export default function OrderPage() {
   const [orderResult, setOrderResult] = useState<any>(null)
   const [error, setError] = useState('')
 
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem(CART_KEY)
-      if (saved) {
-        const parsed = JSON.parse(saved)
-        if (parsed.items?.length) {
-          setCartData(parsed)
-        }
-      }
-    } catch {}
-  }, [])
-
-  const total = cartData?.items.reduce((sum, item) => sum + item.price * item.quantity, 0) ?? 0
+  const total = getTotalPrice()
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!cartData || !tableNumber) return
+    if (!items.length || !tableNumber) return
 
     setSubmitting(true)
     setError('')
@@ -57,10 +106,10 @@ export default function OrderPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           table_number: parseInt(tableNumber),
-          period_id: cartData.period_id,
+          period_id: periodId,
           customer_name: customerName || undefined,
           notes: notes || undefined,
-          items: cartData.items.map(item => ({
+          items: items.map((item) => ({
             menu_item_id: item.menu_item_id,
             quantity: item.quantity,
             unit_price: item.price,
@@ -74,7 +123,7 @@ export default function OrderPage() {
         throw new Error(result.error || 'Error al crear el pedido')
       }
 
-      localStorage.removeItem(CART_KEY)
+      clearCart()
       setOrderResult(result.data)
     } catch (err: any) {
       setError(err.message)
@@ -83,57 +132,70 @@ export default function OrderPage() {
     }
   }
 
-  // Success screen
+  // Success screen with tracker
   if (orderResult) {
     return (
-      <div className="min-h-screen bg-gradient-to-b from-green-50 to-gray-50 flex items-center justify-center px-4">
-        <div className="text-center max-w-md mx-auto animate-fade-in-up">
-          <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6 animate-bounce-in">
-            <svg className="w-12 h-12 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
-            </svg>
-          </div>
-          <h1 className="text-3xl font-extrabold text-gray-900 mb-2">Pedido Confirmado</h1>
-          <p className="text-gray-500 mb-8">
-            Tu pedido ha sido enviado a la cocina
-          </p>
-          <Card className="mb-8 text-left">
-            <div className="space-y-4">
-              <div>
-                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Numero de orden</p>
-                <p className="text-2xl font-extrabold text-primary">
-                  #{orderResult.id?.slice(0, 8).toUpperCase()}
-                </p>
-              </div>
-              <div className="flex gap-8">
-                <div>
-                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Mesa</p>
-                  <p className="text-xl font-bold text-gray-900">{orderResult.table_number}</p>
-                </div>
-                <div>
-                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Total</p>
-                  <p className="text-xl font-bold text-primary">{formatPrice(orderResult.total_amount)}</p>
-                </div>
-              </div>
+      <div className="min-h-screen bg-gradient-to-b from-green-50 to-gray-50">
+        <Navbar />
+        <div className="pt-24 px-4">
+          <div className="max-w-md mx-auto animate-fade-in-up">
+            <div className="text-center mb-8">
+              <motion.div
+                initial={{ scale: 0 }}
+                animate={{ scale: 1 }}
+                transition={{ type: 'spring', stiffness: 200 }}
+                className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6"
+              >
+                <Check className="w-12 h-12 text-green-600" />
+              </motion.div>
+              <h1 className="text-3xl font-extrabold text-gray-900 mb-2">Pedido Creado</h1>
+              <p className="text-gray-500">
+                Tu pedido ha sido creado. Un mesero lo confirmara en breve.
+              </p>
             </div>
-          </Card>
-          <Link href="/menu">
-            <Button size="lg" className="w-full">Volver al Menu</Button>
-          </Link>
+
+            <Card className="mb-4">
+              <div className="space-y-4">
+                <div>
+                  <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Numero de orden</p>
+                  <p className="text-2xl font-extrabold text-primary">
+                    #{orderResult.order_number || orderResult.id?.slice(0, 8).toUpperCase()}
+                  </p>
+                </div>
+                <div className="flex gap-8">
+                  <div>
+                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Mesa</p>
+                    <p className="text-xl font-bold text-gray-900">{orderResult.table_number}</p>
+                  </div>
+                  <div>
+                    <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Total</p>
+                    <p className="text-xl font-bold text-primary">{formatPrice(orderResult.total_amount)}</p>
+                  </div>
+                </div>
+              </div>
+            </Card>
+
+            <OrderTracker orderId={orderResult.id} />
+
+            <div className="mt-8">
+              <Link href="/menu">
+                <Button size="lg" className="w-full">Volver al Menu</Button>
+              </Link>
+            </div>
+          </div>
         </div>
       </div>
     )
   }
 
   // Empty cart
-  if (!cartData || cartData.items.length === 0) {
+  if (items.length === 0) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
+        <Navbar />
         <div className="text-center animate-fade-in-up">
           <div className="w-24 h-24 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-6">
-            <svg className="w-12 h-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M3 3h2l.4 2M7 13h10l4-8H5.4M7 13L5.4 5M7 13l-2.293 2.293c-.63.63-.184 1.707.707 1.707H17m0 0a2 2 0 100 4 2 2 0 000-4zm-8 2a2 2 0 100 4 2 2 0 000-4z" />
-            </svg>
+            <ShoppingBag className="w-12 h-12 text-gray-400" />
           </div>
           <h1 className="text-2xl font-extrabold text-gray-800 mb-2">Tu carrito esta vacio</h1>
           <p className="text-gray-500 mb-8">Agrega items desde el menu para hacer un pedido</p>
@@ -147,17 +209,17 @@ export default function OrderPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      <Navbar />
+
       {/* Header */}
-      <div className="relative bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-900 text-white py-10 overflow-hidden">
+      <div className="relative bg-gradient-to-br from-blue-600 via-blue-700 to-indigo-900 text-white pt-24 pb-10 overflow-hidden">
         <div className="absolute -top-10 -right-10 w-40 h-40 bg-white/5 rounded-full" />
         <div className="container mx-auto px-4 relative z-10">
           <Link
             href="/menu"
             className="inline-flex items-center gap-2 text-sm text-blue-200 hover:text-white transition-colors mb-4 group"
           >
-            <svg className="w-4 h-4 group-hover:-translate-x-1 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
+            <ChevronLeft className="w-4 h-4 group-hover:-translate-x-1 transition-transform" />
             Volver al menu
           </Link>
           <h1 className="text-3xl md:text-4xl font-extrabold animate-fade-in-up">Confirmar Pedido</h1>
@@ -174,14 +236,12 @@ export default function OrderPage() {
         <Card className="mb-6 animate-fade-in-up">
           <div className="flex items-center gap-3 mb-5">
             <div className="w-10 h-10 bg-primary/10 rounded-xl flex items-center justify-center">
-              <svg className="w-5 h-5 text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-              </svg>
+              <ClipboardList className="w-5 h-5 text-primary" />
             </div>
             <h2 className="text-xl font-extrabold text-gray-900">Resumen del Pedido</h2>
           </div>
           <div className="divide-y divide-gray-100">
-            {cartData.items.map(item => (
+            {items.map((item) => (
               <div key={item.id} className="py-4 flex justify-between items-center">
                 <div>
                   <p className="font-semibold text-gray-900">{item.name}</p>
@@ -204,10 +264,8 @@ export default function OrderPage() {
         {/* Order form */}
         <Card className="animate-fade-in-up animation-delay-100">
           <div className="flex items-center gap-3 mb-5">
-            <div className="w-10 h-10 bg-accent/10 rounded-xl flex items-center justify-center">
-              <svg className="w-5 h-5 text-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
-              </svg>
+            <div className="w-10 h-10 bg-amber-500/10 rounded-xl flex items-center justify-center">
+              <Pencil className="w-5 h-5 text-amber-600" />
             </div>
             <h2 className="text-xl font-extrabold text-gray-900">Datos del Pedido</h2>
           </div>
@@ -222,7 +280,7 @@ export default function OrderPage() {
                 min="1"
                 required
                 value={tableNumber}
-                onChange={e => setTableNumber(e.target.value)}
+                onChange={(e) => setTableNumber(e.target.value)}
                 className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all text-lg"
                 placeholder="Ej: 5"
               />
@@ -236,7 +294,7 @@ export default function OrderPage() {
                 id="name"
                 type="text"
                 value={customerName}
-                onChange={e => setCustomerName(e.target.value)}
+                onChange={(e) => setCustomerName(e.target.value)}
                 className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all"
                 placeholder="Tu nombre"
               />
@@ -249,7 +307,7 @@ export default function OrderPage() {
               <textarea
                 id="notes"
                 value={notes}
-                onChange={e => setNotes(e.target.value)}
+                onChange={(e) => setNotes(e.target.value)}
                 rows={3}
                 className="w-full border-2 border-gray-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all resize-none"
                 placeholder="Instrucciones especiales, alergias, etc."
@@ -258,9 +316,6 @@ export default function OrderPage() {
 
             {error && (
               <div className="bg-red-50 text-red-600 p-4 rounded-xl text-sm font-medium flex items-center gap-2 animate-scale-in border border-red-100">
-                <svg className="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
                 {error}
               </div>
             )}
@@ -282,9 +337,7 @@ export default function OrderPage() {
               ) : (
                 <span className="flex items-center justify-center gap-2">
                   Confirmar Pedido
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
-                  </svg>
+                  <Check className="w-5 h-5" />
                 </span>
               )}
             </Button>
